@@ -5,6 +5,7 @@ from streamlit_folium import st_folium
 from geopy.distance import geodesic
 import os
 import requests
+import time
 from shapely.geometry import Point, shape
 
 # 1. НАСТРОЙКА СТРАНИЦЫ И КОНСТАНТ
@@ -57,7 +58,7 @@ def load_sheet_data(sheet_name):
         return None
 
 
-# Кэширование геоданных границ стран Европы
+# Кэширование данных границ стран Европы
 @st.cache_data
 def load_europe_geojson():
     try:
@@ -67,32 +68,24 @@ def load_europe_geojson():
         st.error(f"Не удалось загрузить карту границ Европы: {e}")
         return None
 
-
 modes = get_game_modes()
 europe_geojson = load_europe_geojson()
 
-
-# ДОБАВЛЕНО: ГИС-фильтр для разделения Великобритании по координатам клика
+# Фильтр для разделения Великобритании по координатам клика
 def refine_uk_region(lat, lon):
-    # 1. Северная Ирландия (отдельный остров на западе)
     if lon < -5.4 and lat > 54.0:
         return "Northern Ireland"
-    # 2. Шотландия (все что севернее исторической границы с Англией)
     if lat > 55.75:
         return "Scotland"
-    # 3. Уэльс (западный географический выступ)
     if -5.3 <= lon <= -2.65 and 51.35 <= lat <= 53.45:
         return "Wales"
-    # 4. Все остальное — Англия
     return "England"
-
 
 # 2. ИНИЦИАЛИЗАЦИЯ ИГРОВОГО СОСТОЯНИЯ
 if modes and europe_geojson:
     if "game_started" not in st.session_state:
         st.session_state.game_started = False
         st.session_state.game_over = False
-
 
     def start_new_game(selected_mode):
         mode_df = load_sheet_data(selected_mode)
@@ -120,49 +113,146 @@ if modes and europe_geojson:
             st.session_state.is_player_game = is_player_mode
             st.session_state.clicked_country_feature = None
             st.session_state.correct_country_feature = None
-
+            st.session_state.start_time = time.time()
+            st.session_state.total_time = None
+            st.session_state.leaderboard_saved = False
 
     def next_round():
         if st.session_state.current_round >= st.session_state.max_rounds:
             st.session_state.game_over = True
+            st.session_state.total_time = round(time.time() - st.session_state.start_time, 1)
         else:
             st.session_state.current_round += 1
             st.session_state.answered = False
             st.session_state.clicked_country_feature = None
             st.session_state.correct_country_feature = None
 
+    def save_to_leaderboard(name, score, duration, mode):
+        LEADERBOARD_FILE = "leaderboard.csv"
+        target_columns = ["Имя", "Режим", "Очки", "Время (сек)"]
+        new_row = pd.DataFrame([{
+            "Имя": name,
+            "Режим": mode,
+            "Очки": score,
+            "Время (сек)": duration
+        }])
+
+        if os.path.exists(LEADERBOARD_FILE):
+            try:
+                leaderboard_df = pd.read_csv(LEADERBOARD_FILE)
+                if not all(col in leaderboard_df.columns for col in target_columns):
+                    leaderboard_df = pd.DataFrame(columns=target_columns)
+            except:
+                leaderboard_df = pd.DataFrame(columns=target_columns)
+
+            leaderboard_df = pd.concat([leaderboard_df, new_row], ignore_index=True)
+        else:
+            leaderboard_df = new_row
+
+        leaderboard_df = leaderboard_df[target_columns]
+        leaderboard_df = leaderboard_df.sort_values(by=["Очки", "Время (сек)"], ascending=[False, True])
+        leaderboard_df.to_csv(LEADERBOARD_FILE, index=False)
 
     # 3. ИНТЕРФЕЙС
     if not st.session_state.game_started:
         st.title("⚽ Football GeoGuesser")
-        st.write("Добро пожаловать в ГИС-викторину! Выберите режим игры ниже.")
+        st.write("Добро пожаловать в футбольный GeoGuesser! Выберите режим игры ниже.")
         chosen_mode = st.radio("Доступные режимы из вашего Excel:", modes)
         st.button("Начать игру 🚀", on_click=start_new_game, args=(chosen_mode,), type="primary")
 
+    # ЭКРАН 2: ФИНАЛЬНЫЙ ЭКРАН
     elif st.session_state.game_over:
         st.title("🏆 Игра окончена! Результаты анализа")
         hist_df = pd.DataFrame(st.session_state.history)
 
+        # Раскладка базовых метрик
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Итоговый результат", f"{st.session_state.score} очков")
+        m2.metric("Время прохождения", f"{st.session_state.total_time} сек")
+
         if st.session_state.is_player_game:
-            st.metric("Итоговый результат", f"{st.session_state.score} из {st.session_state.max_rounds} очков")
+            m3.metric("Точность", f"{st.session_state.score} / {st.session_state.max_rounds}")
+            m4.empty()
+
+            st.write("---")
             st.subheader("📊 Ваша точность по игрокам:")
-            hist_df['Результат'] = hist_df['points'].apply(lambda x: "Правильно" if x == 1 else "Ошибка")
-            st.dataframe(hist_df[['item', 'correct_country', 'clicked_country', 'Результат']])
+            report_df = hist_df[['item', 'correct_country', 'clicked_country', 'points']].copy()
+            report_df.columns = ['Футболист', 'Правильная страна', 'Выбранная страна', 'Результат']
+            report_df['Результат'] = report_df['Результат'].apply(lambda x: "✅ Правильно" if x == 1 else "❌ Ошибка")
+            report_df.index = report_df.index + 1
+            st.dataframe(report_df, use_container_width=True)
+
         else:
             avg_err = hist_df['distance'].mean()
             best_round = hist_df.loc[hist_df['distance'].idxmin()]
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Итоговый результат", f"{st.session_state.score} очков")
-            m2.metric("Средняя ошибка", f"{avg_err:.1f} км.")
-            m3.metric("Лучший раунд", f"{best_round['distance']:.1f} км. ({best_round['club']})")
+            m3.metric("Средняя ошибка", f"{avg_err:.1f} км.")
+            m4.metric("Лучший раунд", f"{best_round['distance']:.1f} км. ({best_round['club']})")
+
             st.write("---")
-            st.subheader("📊 Распределение пространственных ошибок")
-            st.bar_chart(hist_df.set_index('club')['distance'])
+
+            # ИСПРАВЛЕНО: Графики пространственных сдвигов и карта теперь живут ЗДЕСЬ (внутри else)
+            # Они больше не будут пытаться прочитаться в режиме футболистов
+            dash_col1, dash_col2 = st.columns([1, 1])
+
+            with dash_col1:
+                st.subheader("📊 Распределение пространственных ошибок")
+                st.bar_chart(hist_df.set_index('club')['distance'])
+
+            with dash_col2:
+                st.subheader("🗺️ Сводная карта всех прогнозов")
+
+                if "eng" in st.session_state.active_mode.lower() or "англ" in st.session_state.active_mode.lower():
+                    f_center, f_zoom = [53.0, -1.5], 6
+                else:
+                    f_center, f_zoom = [48.0, 10.0], 4
+
+                final_map = folium.Map(location=f_center, zoom_start=f_zoom, tiles="Cartodb Positron")
+
+                for _, row in hist_df.iterrows():
+                    u_coords = (row['user_lat'], row['user_lon'])
+                    a_coords = (row['actual_lat'], row['actual_lon'])
+
+                    folium.Marker(u_coords, popup=f"Выбор для {row['club']}",
+                                  icon=folium.Icon(color="red", icon="question")).add_to(final_map)
+                    folium.Marker(a_coords, popup=f"Стадион {row['club']}",
+                                  icon=folium.Icon(color="green", icon="trophy", prefix="fa")).add_to(final_map)
+                    folium.PolyLine([u_coords, a_coords], color="blue", weight=2, opacity=0.6).add_to(final_map)
+
+                st_folium(final_map, width=600, height=450, key="final_analysis_map")
+
+        st.write("---")
+
+        # ТАБЛИЦА ЛИДЕРОВ
+        st.subheader("🏅 Таблица лидеров")
+
+        if not st.session_state.leaderboard_saved:
+            player_name = st.text_input("Введите ваше имя для результата:", key="player_name_input")
+            if st.button("Сохранить результат в таблицу 💾", disabled=not player_name):
+                save_to_leaderboard(player_name, st.session_state.score, st.session_state.total_time,
+                                    st.session_state.active_mode)
+                st.session_state.leaderboard_saved = True
+                st.rerun()
+        else:
+            st.success("Ваш результат успешно зафиксирован в базе данных!")
+
+        if os.path.exists("leaderboard.csv"):
+            lead_df = pd.read_csv("leaderboard.csv")
+            filtered_lead = lead_df[lead_df["Режим"] == st.session_state.active_mode].reset_index(drop=True)
+            if not filtered_lead.empty:
+                filtered_lead.index = filtered_lead.index + 1
+                st.dataframe(filtered_lead.head(10), use_container_width=True)
+            else:
+                st.info(f"В режиме {st.session_state.active_mode} пока нет рекордов, будь первым!")
+        else:
+            st.info("Таблица лидеров пока пуста. Станьте первым!")
+
+        st.write("---")
 
         if st.button("В главное меню 🔄"):
             st.session_state.game_started = False
             st.rerun()
 
+    # ЭКРАН 3: ИГРОВОЙ ПРОЦЕСС
     else:
         current_item = st.session_state.game_clubs[st.session_state.current_round - 1]
         st.title(f"⚽ Режим: {st.session_state.active_mode}")
@@ -254,7 +344,6 @@ if modes and europe_geojson:
                     base_clicked_country = "Undefined"
                     selected_feature = None
 
-                    # Ищем базовое попадание по глобальной карте GeoJSON
                     for feature in europe_geojson['features']:
                         polygon_shape = shape(feature['geometry'])
                         if polygon_shape.contains(click_point):
@@ -270,7 +359,6 @@ if modes and europe_geojson:
                         st.session_state.click_coords = (user_lat, user_lon)
                         st.session_state.clicked_country_feature = selected_feature
 
-                        # ИСПРАВЛЕНО: Если попали в UK, запускаем микро-анализ координат, чтобы узнать точный футбольный регион
                         if base_clicked_country == "United Kingdom":
                             final_clicked_country = refine_uk_region(user_lat, user_lon)
                         else:
@@ -278,7 +366,6 @@ if modes and europe_geojson:
 
                         correct_country_name = current_item['country']
 
-                        # Ищем фичу для подсветки правильного ответа (для Англии/Уэльса подсветит общий UK полигон)
                         search_target = "United Kingdom" if correct_country_name.lower() in ["england", "scotland",
                                                                                              "wales",
                                                                                              "northern ireland"] else correct_country_name
@@ -288,7 +375,6 @@ if modes and europe_geojson:
                                 st.session_state.correct_country_feature = feature
                                 break
 
-                        # ИСПРАВЛЕНО: Проверка строгого соответствия футбольного региона клика и таблицы
                         is_correct = final_clicked_country.lower() == correct_country_name.lower()
 
                         points = 1 if is_correct else 0
@@ -317,7 +403,14 @@ if modes and europe_geojson:
                         "actual_lat": current_item['lat'], "actual_lon": current_item['lon']
                     })
 
-                    points = max(0, int(1000 - (distance * 2)))
+                    # ИСПРАВЛЕНО: Динамический расчет очков в зависимости от пространственного масштаба (Англия vs Лига Чемпионов)
+                    if "eng" in st.session_state.active_mode.lower() or "англ" in st.session_state.active_mode.lower():
+                        # Масштаб Англии (строгий): штраф 4 очка за км (макс. 250 км промаха до 0 очков)
+                        points = max(0, int(1000 - (distance * 4)))
+                    else:
+                        # Масштаб Лиги Чемпионов (мягкий): штраф 0.5 очка за км (макс. 2000 км промаха до 0 очков)
+                        points = max(0, int(1000 - (distance * 0.5)))
+
                     st.session_state.score += points
                     st.session_state.answered = True
                     st.rerun()
