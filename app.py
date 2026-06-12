@@ -124,7 +124,6 @@ def make_leaderboard_table(df, current_name=None, current_score=None, current_ti
 
         if current_name and str(row['Имя']) == str(current_name):
             match_score = (current_score is None or float(row['Очки']) == float(current_score))
-            # ИСПРАВЛЕНО: Сравниваем время через разницу (< 0.1 сек), чтобы избежать багов точности округления сотых долей float в pandas
             match_time = (current_time is None or abs(float(row['Время (сек)']) - float(current_time)) < 0.1)
             if match_score and match_time:
                 is_current_run = True
@@ -136,11 +135,133 @@ def make_leaderboard_table(df, current_name=None, current_score=None, current_ti
         elif is_current_run:
             row_style = {'backgroundColor': '#C3E6CB', 'color': '#155724', 'fontWeight': 'bold'}
 
-        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Переносим row_style из html.Tr внутрь каждого html.Td напрямую.
-        # Это принудительно заставит ячейки перекраситься, пробивая стандартные слои зебры Bootstrap.
         rows.append(html.Tr([html.Td(row[col], style=row_style) for col in df.columns]))
 
     return dbc.Table([header, html.Tbody(rows)], striped=True, bordered=True, hover=True, responsive=True, size="sm")
+
+def build_league_tabs_widget():
+    LEAGUES_FILE = "leagues_standings.csv"
+
+    if not os.path.exists(LEAGUES_FILE):
+        return html.Div("Файл турнирных таблиц не найден.", className="text-muted text-center py-3")
+    try:
+        # Читаем файл с явным указанием кодировки utf-8 для корректных флагов и кириллицы
+        df = pd.read_csv(LEAGUES_FILE, encoding='utf-8', sep=';')
+    except:
+        return html.Div("Ошибка при чтении файла таблиц.", className="text-muted text-center py-3")
+
+    tabs_children = []
+    # Извлекаем все уникальные лиги из файла в том порядке, в каком они записаны
+    unique_leagues = df['Лига'].unique()
+
+    for league_name in unique_leagues:
+        df_league = df[df['Лига'] == league_name]
+        table_rows = []
+
+        for _, t in df_league.iterrows():
+            table_rows.append(html.Tr([
+                html.Td(t["М"], style={'fontWeight': 'bold', 'padding': '4px 2px'}),
+                # ИСПРАВЛЕНО: Убрали жесткий лимит в 90px. Теперь имя расширяется на всю доступную ему волю!
+                # Свойства overflow и ellipsis оставляем как страховку, чтобы текст красиво уходил в три точки, если имя ОЧЕНЬ длинное
+                html.Td(t["Клуб"],
+                        style={'textAlign': 'left', 'padding': '4px 2px', 'whiteSpace': 'nowrap', 'overflow': 'hidden',
+                               'textOverflow': 'ellipsis'}),
+                html.Td(t["И"], style={'padding': '4px 2px'}),
+                html.Td(t["В"], style={'padding': '4px 2px', 'color': '#28a745'}),
+                html.Td(t["Н"], style={'padding': '4px 2px', 'color': '#6c757d'}),
+                html.Td(t["П"], style={'padding': '4px 2px', 'color': '#dc3545'}),
+                html.Td(t["О"], style={'fontWeight': 'bold', 'padding': '4px 2px', 'backgroundColor': '#f8f9fa'})
+            ]))
+
+        table_element = dbc.Table([
+            html.Thead(html.Tr([
+                # ИСПРАВЛЕНО: Задали фиксированные микро-ширины для числовых столбцов.
+                # Так как у "Клуб" ширины нет, под капотом tableLayout='fixed' он заберет себе абсолютно всё свободное место.
+                html.Th("М", style={'padding': '4px 2px', 'width': '26px'}),
+                html.Th("Клуб", style={'textAlign': 'left', 'padding': '4px 2px'}),
+                html.Th("И", style={'padding': '4px 2px', 'width': '26px'}),
+                html.Th("В", style={'padding': '4px 2px', 'width': '22px'}),
+                html.Th("Н", style={'padding': '4px 2px', 'width': '22px'}),
+                html.Th("П", style={'padding': '4px 2px', 'width': '22px'}),
+                html.Th("О", style={'padding': '4px 2px', 'width': '32px'})
+            ]), style={'backgroundColor': '#eef1f6', 'fontSize': '10px'}),
+            html.Tbody(table_rows)
+        ], bordered=False, hover=True, size="sm",
+            style={'fontSize': '11px', 'textAlign': 'center', 'marginBottom': '0px', 'tableLayout': 'fixed'})
+
+        scroll_container = html.Div(
+            table_element,
+            style={'maxHeight': '570px', 'overflowY': 'auto', 'marginTop': '5px', 'borderBottom': '1px solid #edf2f7'}
+        )
+
+        tabs_children.append(dbc.Tab(
+            scroll_container,
+            label=league_name,
+            tab_id=league_name,
+            tab_style={'padding': '4px 6px', 'fontSize': '11px'},
+            label_style={'fontSize': '11px', 'color': '#495057'}
+        ))
+
+    return dbc.Tabs(
+        id="league-tabs-container",
+        children=tabs_children,
+        active_tab=unique_leagues[0] if len(unique_leagues) > 0 else None
+    )
+
+def build_world_cup_widget():
+    WC_FILE = "world_cup_matches.xlsx"
+
+    if not os.path.exists(WC_FILE):
+        if os.path.exists("world_cup_matches.csv"):
+            WC_FILE = "world_cup_matches.csv"
+        else:
+            return html.Div("Файл матчей ЧМ не найден.", className="text-muted text-center py-3", style={'fontSize': '12px'})
+
+    try:
+        if WC_FILE.endswith('.csv'):
+            df = pd.read_csv(WC_FILE, encoding='utf-8')
+        else:
+            try:
+                df = pd.read_excel(WC_FILE)
+            except:
+                df = pd.read_csv(WC_FILE, encoding='utf-8')
+    except:
+        return html.Div("Ошибка при чтении файла матчей ЧМ.", className="text-muted text-center py-3", style={'fontSize': '12px'})
+
+    df = df.fillna("")
+    match_elements = []
+    total_rows = len(df)
+
+    if total_rows == 0:
+        return html.Div("В расписании пока нет матчей.", className="text-muted text-center py-3", style={'fontSize': '12px'})
+
+    for idx, r in df.iterrows():
+        is_last = (idx == total_rows - 1)
+        block_class = "pb-1 mb-0" if is_last else "pb-2 mb-2 border-bottom"
+
+        def get_flag_img(flag_code):
+            code_clean = str(flag_code).strip().lower()
+            if not code_clean:
+                return ""
+            return html.Img(
+                src=f"https://flagcdn.com/w20/{code_clean}.png",
+                style={'borderRadius': '2px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.2)', 'verticalAlign': 'middle'}
+            )
+            return flag_code
+
+        flag1_img = get_flag_img(r['Флаг1'])
+        flag2_img = get_flag_img(r['Флаг2'])
+
+        match_elements.append(html.Div([
+            html.Small(f"{r['Дата']} | {r['Группа']}", className="text-muted d-block", style={'fontSize': '11px'}),
+            html.Div([
+                html.Span([f"{r['Команда1']} ", flag1_img], className="fw-bold", style={'display': 'inline-flex', 'alignItems': 'center', 'gap': '6px'}),
+                html.Span(" — ", className="text-muted mx-2"),
+                html.Span([flag2_img, f" {r['Команда2']}"], className="fw-bold", style={'display': 'inline-flex', 'alignItems': 'center', 'gap': '6px'})
+            ], style={'fontSize': '13px', 'marginTop': '2px', 'display': 'flex', 'alignItems': 'center'})
+        ], className=block_class))
+
+    return html.Div(match_elements, style={'maxHeight': '570px', 'overflowY': 'auto', 'marginTop': '5px', 'paddingRight': '5px'})
 
 # ==============================================================================
 # LAYOUT
@@ -153,32 +274,62 @@ app.layout = dbc.Container([
     dcc.Store(id='click-coords'),
 
     # СТАРТОВЫЙ ЭКРАН
-    html.Div(id='start-screen', style={'padding': '60px 50px', 'maxWidth': '800px', 'margin': '0 auto'}, children=[
-        html.H1("⚽ Football GeoGuesser", className="text-center mb-4", style={'fontWeight': 'bold'}),
+    html.Div(id='start-screen', style={'padding': '50px 10px', 'maxWidth': '1300px', 'margin': '0 auto'}, children=[
+        html.H1("⚽ Football GeoGuesser", className="text-center mb-5",
+                style={'fontWeight': 'bold', 'color': '#1a202c'}),
 
-        dbc.Card([
-            dbc.CardBody([
-                html.Label("👤 Ваше имя перед стартом:", className="fw-bold mb-2"),
-                dbc.Input(id='player-name-input', value="Игрок", type="text", className="mb-4"),
+        # ОБЯЗАТЕЛЬНО: Оборачиваем все три панели в dbc.Row, чтобы они встали плечом к плечу
+        dbc.Row([
+            # ЛЕВАЯ ПАНЕЛЬ: Таблицы чемпионатов из leagues_standings.csv
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H6("🏆 Таблицы чемпионатов", className="fw-bold text-dark mb-3",
+                                style={'letterSpacing': '0.5px'}),
+                        build_league_tabs_widget()
+                    ], style={'padding': '15px 10px'})
+                ], style={'boxShadow': '0 4px 15px rgba(0,0,0,0.04)', 'borderRadius': '15px', 'border': 'none',
+                          'overflow': 'hidden'})
+            ], width=3),
 
-                html.Label("🗺️ Выберите режим игры:", className="fw-bold mb-2"),
-                dbc.RadioItems(
-                    id='mode-selector',
-                    options=[{'label': get_mode_display_name(m), 'value': m} for m in MODES],
-                    value=MODES[0] if MODES else None,
-                    className="mb-4"
-                ),
-                html.Div(id='rules-block', className="mb-4"),
+            # ЦЕНТРАЛЬНАЯ ПАНЕЛЬ: Главное меню настроек матча
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.Label("👤 Ваше имя перед стартом:", className="fw-bold mb-2"),
+                        dbc.Input(id='player-name-input', value="Игрок", type="text", className="mb-4"),
 
-                html.Div(id='start-leaderboard-container', className="mb-4"),
+                        html.Label("🗺️ Выберите режим игры:", className="fw-bold mb-2"),
+                        dbc.RadioItems(
+                            id='mode-selector',
+                            options=[{'label': get_mode_display_name(m), 'value': m} for m in MODES],
+                            value=MODES[0] if MODES else None,
+                            className="mb-4"
+                        ),
+                        html.Div(id='rules-block', className="mb-4"),
 
-                html.Div(
-                    dbc.Button("🚀 Начать игру", id='start-btn', color="primary", size="lg",
-                               style={'padding': '10px 40px'}),
-                    className="text-center"
-                )
-            ])
-        ], style={'boxShadow': '0 4px 15px rgba(0,0,0,0.05)', 'borderRadius': '15px'})
+                        html.Div(id='start-leaderboard-container', className="mb-4"),
+
+                        html.Div(
+                            dbc.Button("🚀 Начать игру", id='start-btn', color="primary", size="lg",
+                                       style={'padding': '10px 40px'}),
+                            className="text-center"
+                        )
+                    ])
+                ], style={'boxShadow': '0 4px 15px rgba(0,0,0,0.05)', 'borderRadius': '15px'})
+            ], width=6),
+
+            # ПРАВАЯ ПАНЕЛЬ: Динамическая афиша матчей ЧМ из Excel
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H6("📅 ЧМ: Главные матчи", className="fw-bold text-dark mb-3",
+                                style={'letterSpacing': '0.5px'}),
+                        build_world_cup_widget()
+                    ], style={'padding': '15px 15px'})
+                ], style={'boxShadow': '0 4px 15px rgba(0,0,0,0.04)', 'borderRadius': '15px', 'border': 'none'})
+            ], width=3)
+        ])
     ]),
 
     # ИГРОВОЙ КОНТЕЙНЕР
@@ -217,9 +368,10 @@ app.layout = dbc.Container([
 @app.callback(
     Output('rules-block', 'children'),
     Output('start-leaderboard-container', 'children'),  # Добавили новый выход
-    Input('mode-selector', 'value')
+    Input('mode-selector', 'value'),
+    Input('restart-btn', 'n_clicks')
 )
-def update_rules_and_main_leaderboard(selected_mode):
+def update_rules_and_main_leaderboard(selected_mode, restart_clicks):
     if not selected_mode:
         return "", ""
 
@@ -234,7 +386,7 @@ def update_rules_and_main_leaderboard(selected_mode):
             html.P("Тебе даны эмблема и название стадиона футбольного клуба. Твоя задача - кликнуть по карте, как можно ближе к стадиону клуба! Максимум 10000 очков. Всего: 10 раундов.", className="mb-0") # ── ИСПРАВЛЕНО
         ], color="info", className="mb-3 text-center")
 
-    # 2. НОВАЯ ЛОГИКА: Читаем и фильтруем таблицу лидеров для главного меню
+    # Читаем и фильтруем таблицу лидеров для главного меню
     table_element = html.Div("В этом режиме пока нет рекордов. Будь первым!",
                              className="text-muted text-center style={'fontSize': '14px'}")
     if os.path.exists("leaderboard.csv"):
@@ -293,7 +445,7 @@ def start_game_session(n_clicks, p_name, selected_mode):
                                       style={'width': '100%', 'maxWidth': '280px', 'borderRadius': '12px',
                                              'boxShadow': '0 4px 12px rgba(0,0,0,0.15)'})
                 break
-        map_center, map_zoom = [50.0, 10.0], 4
+        map_center, map_zoom = [50.0, 10.0], 5
     else:
         top_row_html = html.H5(f"⚽ Клуб: {current_item['club']}", id='info-stadium', className="fw-bold mb-1")
         bottom_row_html = html.P(f"🏟️ Стадион: {current_item['stadium']}", id='info-club', className="text-white-50")
@@ -458,20 +610,31 @@ def confirm_guess(n_clicks, u_coords, game_data, state):
         if correct_country_feature:
             try:
                 country_shape = shape(correct_country_feature['geometry'])
-                centroid = country_shape.centroid
-                a_coords = [centroid.y, centroid.x]
+                minx, miny, maxx, maxy = country_shape.bounds
+
+                user_lat_clamped = max(miny - 6.0, min(maxy + 6.0, u_coords[0]))
+                user_lon_clamped = max(minx - 8.0, min(maxx + 8.0, u_coords[1]))
+
+                min_lat = min(miny, user_lat_clamped)
+                min_lon = min(minx, user_lon_clamped)
+                max_lat = max(maxy, user_lat_clamped)
+                max_lon = max(maxx, user_lon_clamped)
+
+                # Страховка для карликовых стран (чтобы не зумило до одной улицы)
+                lat_diff = max(max_lat - min_lat, 3.0)
+                lon_diff = max(max_lon - min_lon, 3.0)
+
+                lat_center = (min_lat + max_lat) / 2
+                lon_center = (min_lon + max_lon) / 2
+
+                padded_bounds = [
+                    [lat_center - lat_diff * 0.65, lon_center - lon_diff * 0.65],
+                    [lat_center + lat_diff * 0.65, lon_center + lon_diff * 0.65]
+                ]
             except:
-                a_coords = [50.0, 10.0]
+                padded_bounds = [[u_coords[0] - 3, u_coords[1] - 3], [u_coords[0] + 3, u_coords[1] + 3]]
         else:
-            a_coords = [50.0, 10.0]
-
-        lat_center, lon_center = (u_coords[0] + a_coords[0]) / 2, (u_coords[1] + a_coords[1]) / 2
-        # Минимальный порог изменен с 0.04 до 0.005 для супер-зума
-        lat_delta, lon_delta = max(abs(u_coords[0] - a_coords[0]) / 2, 0.005), max(abs(u_coords[1] - a_coords[1]) / 2,
-                                                                                   0.005)
-        padded_bounds = [[lat_center - lat_delta * 1.3, lon_center - lon_delta * 1.3],
-                         [lat_center + lat_delta * 1.3, lon_center + lon_delta * 1.3]]
-
+            padded_bounds = [[u_coords[0] - 3, u_coords[1] - 3], [u_coords[0] + 3, u_coords[1] + 3]]
 
     # --- ЛОГИКА: РЕЖИМ СТАДИОНОВ ---
     else:
@@ -533,9 +696,7 @@ def confirm_guess(n_clicks, u_coords, game_data, state):
     state['answered'] = True
     return elements, dict(bounds=padded_bounds), feedback, state, {'display': 'none'}, {'display': 'block'}
 
-
 # 6. КОЛБЭК СМЕНЫ РАУНДОВ И ВЫВОДА ФИНАЛЬНОЙ КАРТЫ
-# ПОЛНОСТЬЮ ЗАМЕНИ КОЛБЭК СМЕНЫ РАУНДОВ НА ЭТОТ ВАРИАНТ:
 
 @app.callback(
     Output('round-indicator', 'children'),
@@ -731,7 +892,7 @@ def next_round_or_end(n_clicks, game_data, state):
 def back_to_menu(n_clicks, state):
     if n_clicks:
         saved_name = state.get('player_name', "Игрок")
-        return {'padding': '60px 50px', 'maxWidth': '800px', 'margin': '0 auto'}, {'display': 'none'}, saved_name
+        return {'padding': '50px 10px', 'maxWidth': '1300px', 'margin': '0 auto'}, {'display': 'none'}, saved_name
     return no_update, no_update, no_update
 
 if __name__ == '__main__':
