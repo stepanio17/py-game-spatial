@@ -13,10 +13,10 @@ from shapely.geometry import Point, shape, box, mapping
 
 # Включаем suppress_callback_exceptions для динамического рендеринга ГИС-компонентов
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
+server = app.server
 
 FILE_NAME = "DataForSpatialGame.xlsx"
 EUROPE_GEOJSON_URL = "https://raw.githubusercontent.com/leakyMirror/map-of-europe/master/GeoJSON/europe.geojson"
-
 
 def get_game_modes():
     if os.path.exists(FILE_NAME):
@@ -130,7 +130,6 @@ def make_leaderboard_table(df, current_name=None, current_score=None, current_ti
 
         row_style = {}
         if is_first:
-            # ИСПРАВЛЕНО: Добавлен потерявшийся знак '#' перед цветом текста 212529
             row_style = {'backgroundColor': '#FFD700', 'color': '#212529', 'fontWeight': 'bold'}
         elif is_current_run:
             row_style = {'backgroundColor': '#C3E6CB', 'color': '#155724', 'fontWeight': 'bold'}
@@ -145,13 +144,11 @@ def build_league_tabs_widget():
     if not os.path.exists(LEAGUES_FILE):
         return html.Div("Файл турнирных таблиц не найден.", className="text-muted text-center py-3")
     try:
-        # Читаем файл с явным указанием кодировки utf-8 для корректных флагов и кириллицы
         df = pd.read_csv(LEAGUES_FILE, encoding='utf-8', sep=';')
     except:
         return html.Div("Ошибка при чтении файла таблиц.", className="text-muted text-center py-3")
 
     tabs_children = []
-    # Извлекаем все уникальные лиги из файла в том порядке, в каком они записаны
     unique_leagues = df['Лига'].unique()
 
     for league_name in unique_leagues:
@@ -161,8 +158,6 @@ def build_league_tabs_widget():
         for _, t in df_league.iterrows():
             table_rows.append(html.Tr([
                 html.Td(t["М"], style={'fontWeight': 'bold', 'padding': '4px 2px'}),
-                # ИСПРАВЛЕНО: Убрали жесткий лимит в 90px. Теперь имя расширяется на всю доступную ему волю!
-                # Свойства overflow и ellipsis оставляем как страховку, чтобы текст красиво уходил в три точки, если имя ОЧЕНЬ длинное
                 html.Td(t["Клуб"],
                         style={'textAlign': 'left', 'padding': '4px 2px', 'whiteSpace': 'nowrap', 'overflow': 'hidden',
                                'textOverflow': 'ellipsis'}),
@@ -175,8 +170,6 @@ def build_league_tabs_widget():
 
         table_element = dbc.Table([
             html.Thead(html.Tr([
-                # ИСПРАВЛЕНО: Задали фиксированные микро-ширины для числовых столбцов.
-                # Так как у "Клуб" ширины нет, под капотом tableLayout='fixed' он заберет себе абсолютно всё свободное место.
                 html.Th("М", style={'padding': '4px 2px', 'width': '26px'}),
                 html.Th("Клуб", style={'textAlign': 'left', 'padding': '4px 2px'}),
                 html.Th("И", style={'padding': '4px 2px', 'width': '26px'}),
@@ -278,7 +271,6 @@ app.layout = dbc.Container([
         html.H1("⚽ Football GeoGuesser", className="text-center mb-5",
                 style={'fontWeight': 'bold', 'color': '#1a202c'}),
 
-        # ОБЯЗАТЕЛЬНО: Оборачиваем все три панели в dbc.Row, чтобы они встали плечом к плечу
         dbc.Row([
             # ЛЕВАЯ ПАНЕЛЬ: Таблицы чемпионатов из leagues_standings.csv
             dbc.Col([
@@ -729,14 +721,13 @@ def next_round_or_end(n_clicks, game_data, state):
     is_player = state.get('is_player', False)
 
     if state['round'] >= state['max_rounds']:
-        # ЗАЩИТА: Если из-за двойного клика колбэк уже выполнялся, просто игнорируем повторный сейв
         if state.get('saved', False):
             return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, None, None, {
                 'display': 'block'}, no_update, no_update, no_update, no_update, state
 
         total_time = round(time.time() - state['start_time'], 1)
         save_to_leaderboard(state['player_name'], state['score'], total_time, state['active_mode'])
-        state['saved'] = True  # Выставляем флаг, что сохранение успешно завершено
+        state['saved'] = True
 
         table_element = html.Div("Рекордов пока нет.", className="text-muted")
         if os.path.exists("leaderboard.csv"):
@@ -858,7 +849,6 @@ def next_round_or_end(n_clicks, game_data, state):
                                     style={'width': '100%', 'maxWidth': '280px', 'borderRadius': '12px',
                                            'boxShadow': '0 4px 12px rgba(0,0,0,0.15)'})
                 break
-        # ИСПРАВЛЕНО: Чистый словарь для viewport без ошибочной вложенности bounds
         viewport_reset = dict(center=[50.0 + micro_shift, 10.0], zoom=5)
     else:
         top_row_text = html.H5(f"⚽ Клуб: {current_item['club']}", className="fw-bold mb-1 text-dark")
@@ -877,7 +867,6 @@ def next_round_or_end(n_clicks, game_data, state):
         else:
             viewport_reset = dict(center=[50.0 + micro_shift, 10.0], zoom=5)
 
-    # ИСПРАВЛЕНО: Вынесли return за пределы блоков ветвления, теперь он стабильно срабатывает всегда!
     return (round_txt, score_txt, top_row_text, bottom_row_text, logo_img, "", {'display': 'block'},
             {'display': 'none'}, True, [], viewport_reset, no_update, {'display': 'none'}, "", "", "", "", state)
 
@@ -896,4 +885,5 @@ def back_to_menu(n_clicks, state):
     return no_update, no_update, no_update
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8050)
+    port = int(os.environ.get('PORT', 8050))
+    app.run(debug=False, host='0.0.0.0.', port=port)
