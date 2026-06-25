@@ -885,5 +885,4 @@ def back_to_menu(n_clicks, state):
     return no_update, no_update, no_update
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8050))
-    app.run(debug=False, host='0.0.0.0.', port=port)
+    app.run(debug=True, host='127.0.0.1', port=8050)
