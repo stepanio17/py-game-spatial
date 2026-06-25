@@ -11,7 +11,6 @@ import copy
 from geopy.distance import geodesic
 from shapely.geometry import Point, shape, box, mapping
 
-# Включаем suppress_callback_exceptions для динамического рендеринга ГИС-компонентов
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 server = app.server
 
@@ -311,7 +310,7 @@ app.layout = dbc.Container([
                 ], style={'boxShadow': '0 4px 15px rgba(0,0,0,0.05)', 'borderRadius': '15px'})
             ], width=6),
 
-            # ПРАВАЯ ПАНЕЛЬ: Динамическая афиша матчей ЧМ из Excel
+            # ПРАВАЯ ПАНЕЛЬ: Афиша матчей ЧМ из Excel
             dbc.Col([
                 dbc.Card([
                     dbc.CardBody([
@@ -324,10 +323,8 @@ app.layout = dbc.Container([
         ])
     ]),
 
-    # ИГРОВОЙ КОНТЕЙНЕР
     html.Div(id='game-container'),
 
-    # ФИНАЛЬНЫЙ ЭКРАН
     html.Div(id='end-screen', style={'display': 'none', 'padding': '50px', 'maxWidth': '900px', 'margin': '0 auto'},
              children=[
                  html.H1("🏆 Игра окончена!", className="text-success text-center mb-4", style={'fontWeight': 'bold'}),
@@ -351,7 +348,6 @@ app.layout = dbc.Container([
                  )
              ])
 ], fluid=True, style={'backgroundColor': '#f4f6f9', 'minHeight': '100vh', 'color': '#212529'})
-
 
 # ==============================================================================
 # CALLBACKS
@@ -378,7 +374,6 @@ def update_rules_and_main_leaderboard(selected_mode, restart_clicks):
             html.P("Тебе даны эмблема и название стадиона футбольного клуба. Твоя задача - кликнуть по карте, как можно ближе к стадиону клуба! Максимум 10000 очков. Всего: 10 раундов.", className="mb-0") # ── ИСПРАВЛЕНО
         ], color="info", className="mb-3 text-center")
 
-    # Читаем и фильтруем таблицу лидеров для главного меню
     table_element = html.Div("В этом режиме пока нет рекордов. Будь первым!",
                              className="text-muted text-center style={'fontSize': '14px'}")
     if os.path.exists("leaderboard.csv"):
@@ -391,7 +386,6 @@ def update_rules_and_main_leaderboard(selected_mode, restart_clicks):
                 table_element = html.Div([
                     html.H5("🏅 Топ-10 лучших результатов режима:", className="fw-bold mt-2 mb-2",
                             style={'fontSize': '16px'}),
-                    # ИСПРАВЛЕНО: Теперь таблица в меню тоже подсвечивает первое место золотом!
                     make_leaderboard_table(filtered.head(10))
                 ])
         except:
@@ -424,7 +418,6 @@ def start_game_session(n_clicks, p_name, selected_mode):
     sampled_records = df.sample(min(max_r, len(df))).to_dict(orient='records')
     current_item = sampled_records[0]
 
-    # ИСПРАВЛЕНО: Клуб теперь является главным заголовком (сверху и жирный), стадион — снизу (muted)
     if is_player:
         top_row_html = html.H5(f"👤 Футболист: {current_item['player']}", id='info-stadium', className="fw-bold mb-1")
         bottom_row_html = html.P("", id='info-club', className="text-muted")
@@ -536,7 +529,6 @@ def confirm_guess(n_clicks, u_coords, game_data, state):
 
     elements = []
 
-    # --- ЛОГИКА: РЕЖИМ ФУТБОЛИСТОВ ---
     if is_player:
         user_lat, user_lon = u_coords[0], u_coords[1]
         click_point = Point(user_lon, user_lat)
@@ -612,7 +604,6 @@ def confirm_guess(n_clicks, u_coords, game_data, state):
                 max_lat = max(maxy, user_lat_clamped)
                 max_lon = max(maxx, user_lon_clamped)
 
-                # Страховка для карликовых стран (чтобы не зумило до одной улицы)
                 lat_diff = max(max_lat - min_lat, 3.0)
                 lon_diff = max(max_lon - min_lon, 3.0)
 
@@ -628,7 +619,6 @@ def confirm_guess(n_clicks, u_coords, game_data, state):
         else:
             padded_bounds = [[u_coords[0] - 3, u_coords[1] - 3], [u_coords[0] + 3, u_coords[1] + 3]]
 
-    # --- ЛОГИКА: РЕЖИМ СТАДИОНОВ ---
     else:
         a_coords = [current_item['lat'], current_item['lon']]
         distance = geodesic(u_coords, a_coords).km
@@ -666,12 +656,9 @@ def confirm_guess(n_clicks, u_coords, game_data, state):
 
         lat_center, lon_center = (u_coords[0] + a_coords[0]) / 2, (u_coords[1] + a_coords[1]) / 2
 
-        # Математический расчёт: разница между точками
         lat_diff = abs(u_coords[0] - a_coords[0])
         lon_diff = abs(u_coords[1] - a_coords[1])
 
-        # Чтобы синяя линия занимала ровно 50% экрана, границы карты должны быть в 2 раза больше самой линии.
-        # Задаем микро-порог (0.003), чтобы при идеальном попадании в 0 метров карта не ломалась.
         lat_margin = max(lat_diff, 0.003)
         lon_margin = max(lon_diff, 0.005)
 
@@ -687,8 +674,6 @@ def confirm_guess(n_clicks, u_coords, game_data, state):
 
     state['answered'] = True
     return elements, dict(bounds=padded_bounds), feedback, state, {'display': 'none'}, {'display': 'block'}
-
-# 6. КОЛБЭК СМЕНЫ РАУНДОВ И ВЫВОДА ФИНАЛЬНОЙ КАРТЫ
 
 @app.callback(
     Output('round-indicator', 'children'),
@@ -736,7 +721,6 @@ def next_round_or_end(n_clicks, game_data, state):
             if not filtered.empty:
                 filtered = filtered.drop(columns=["Regime", "Режим"], errors='ignore')
                 filtered.insert(0, 'Место', filtered.index + 1)
-                # ИСПРАВЛЕНО: Вызываем новую функцию и передаем туда параметры текущей сессии для покраски строки в зелёный
                 table_element = make_leaderboard_table(
                     filtered.head(10),
                     current_name=state['player_name'],
@@ -835,7 +819,6 @@ def next_round_or_end(n_clicks, game_data, state):
     round_txt = f"Раунд {state['round']} из {state['max_rounds']}"
     score_txt = f"Общий счет: {state['score']}"
 
-    # Динамический микро-сдвиг для принудительного обновления экрана карты в браузере
     micro_shift = (state['round'] % 2) * 0.00001
 
     if is_player:
